@@ -4,13 +4,7 @@
 
     public class ShaderModel
     {
-        public ShaderModel(
-            string shaderFileName,
-            string generatedClassName,
-            string generatedNamespace,
-            string description,
-            TargetFramework targetFramework,
-            List<ShaderModelConstantRegister> registers)
+        public ShaderModel(string shaderFileName, string generatedClassName, string generatedNamespace, string description, TargetFramework targetFramework, List<ShaderModelConstantRegister> registers)
         {
             this.ShaderFileName = shaderFileName;
             this.GeneratedClassName = generatedClassName;

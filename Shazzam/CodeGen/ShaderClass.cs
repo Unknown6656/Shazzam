@@ -1,20 +1,187 @@
-﻿namespace Shazzam.CodeGen
-{
-    using System;
-    using System.CodeDom;
-    using System.CodeDom.Compiler;
-    using System.Collections.Generic;
-    using System.IO;
-    using System.Linq;
-    using System.Reflection;
-    using System.Windows;
-    using System.Windows.Media;
-    using System.Windows.Media.Media3D;
-    using Microsoft.CSharp;
-    using Shazzam.Converters;
-    using Shazzam.Properties;
+﻿using Microsoft.CodeDom.Providers.DotNetCompilerPlatform;
+using System.Windows.Media.Media3D;
+using System.Collections.Generic;
+using System.CodeDom.Compiler;
+using System.Windows.Media;
+using System.Reflection;
+using System.Windows;
+using System.CodeDom;
+using System.Text;
+using System.Linq;
+using System.IO;
+using System;
 
+using Shazzam.Converters;
+using Shazzam.Properties;
+using System.Windows.Media.Effects;
+
+namespace Shazzam.CodeGen
+{
     internal static class ShaderClass
+    {
+        public static string GetSourceText(CodeDomProvider currentProvider, ShaderModel model, bool includePixelShaderConstructor)
+        {
+            if (currentProvider is CSharpCodeProvider _)
+            {
+                List<(string name, string type)> props = new List<(string name, string type)>();
+
+                string generate_dependency_props()
+                {
+                    StringBuilder sb = new StringBuilder();
+
+                    foreach (ShaderModelConstantRegister register in model.Registers.Concat(new ShaderModelConstantRegister[] {
+                        new ShaderModelConstantRegister("Input", typeof(Brush), 0, null, null, null, null),
+                    }))
+                    {
+                        props.Add((register.RegisterName, register.RegisterType.Name));
+
+                        sb.Append($"        public static readonly DependencyProperty {register.RegisterName}Property = ");
+
+                        if (typeof(Brush).IsAssignableFrom(register.RegisterType))
+                            sb.AppendLine($"RegisterPixelShaderSamplerProperty(nameof({register.RegisterName}), typeof(§classname§), {register.RegisterNumber});");
+                        else
+                            sb.AppendLine($"Register(nameof({register.RegisterName}), typeof({register.RegisterType}), typeof(§classname§), default({register.RegisterType}), {register.RegisterNumber});");
+                    }
+
+                    return sb.ToString();
+                }
+                string generate_props() => string.Join("\n", props.Select(p => $@"
+        public {p.type} {p.name}
+        {{
+            get => ({p.type})GetValue({p.name}Property);
+            set => SetValue({p.name}Property, value);
+        }}"));
+                string generate_update_instr() => string.Join("\n            ", props.Select(p => $"UpdateShaderValue({p.name}Property);"));
+
+                Dictionary<string, object> vars = new Dictionary<string, object>
+                {
+                    ["namespace"] = model.GeneratedNamespace,
+                    ["classname"] = model.GeneratedClassName,
+                    ["depprops"] = generate_dependency_props(),
+                    ["props"] = generate_props(),
+                    ["updateinstr"] = generate_update_instr(),
+                    ["shaderctor"] = includePixelShaderConstructor ? "        public §classname§(PixelShader shader) : base(shader) { }" : "",
+                };
+
+                return @"
+using System.Windows.Media.Media3D;
+using System.Windows.Media.Effects;
+using System.Windows.Media;
+using System.Windows;
+using System;
+
+
+namespace §namespace§
+{
+    public abstract class PixelShaderEffectBase
+        : ShaderEffect
+    {
+        private static readonly string asmname = typeof(PixelShaderEffectBase).Assembly.ToString().Split(',')[0];
+
+        private static Uri GetUri(string name) => new Uri($""pack://application:,,,/{asmname};component/{name}"");
+
+        private static string TrimEnd(string input, string suffix, StringComparison cmp = StringComparison.InvariantCulture) =>
+            (suffix != null) && (input?.EndsWith(suffix, cmp) ?? false) ? input.Substring(0, input.Length - suffix.Length) : input;
+
+        protected static DependencyProperty Register(string name, Type type, Type parent, object @default, int slot) =>
+            DependencyProperty.Register(name, type, parent, new UIPropertyMetadata(@default, PixelShaderConstantCallback(slot)));
+
+
+        internal PixelShaderEffectBase(string name)
+            : this(new PixelShader
+            {
+                UriSource = GetUri(name)
+            })
+        {
+        }
+
+        internal PixelShaderEffectBase(PixelShader shader)
+        {
+            PixelShader = shader;
+
+            UpdateShader();
+        }
+
+        internal protected abstract void UpdateShader();
+    }
+
+
+    public sealed class §classname§
+        : PixelShaderEffectBase
+    {
+§depprops§
+§props§
+§shaderctor§
+
+        public §classname§()
+            : base(""§classname§.ps"")
+        {
+        }
+    
+        protected internal override void UpdateShader()
+        {
+            §updateinstr§
+        }
+    }
+}".DFormat(vars).DFormat(vars).Trim().Replace("System.Double", "double").Replace("(Double)", "(double)"); // so what? Sue me!
+            }
+            else if (currentProvider is Microsoft.CSharp.CSharpCodeProvider csprv)
+                return ___old__ShaderClass.GetSourceText(csprv, model, includePixelShaderConstructor);
+            else
+                throw new Exception($"No code gen support currently exists for `{currentProvider?.GetType()?.FullName}`.");
+        }
+
+        internal static string DFormat(this string formatstring, Dictionary<string, object> dic)
+        {
+            Dictionary<string, int> kti = new Dictionary<string, int>();
+            StringBuilder sb = new StringBuilder(formatstring);
+            int i = 0;
+
+            sb = sb.Replace("{", "{{")
+                   .Replace("}", "}}");
+
+            foreach (var tuple in dic)
+            {
+                sb = sb.Replace($"§{tuple.Key}§", $"{{{i}}}");
+
+                kti.Add(tuple.Key, i);
+
+                ++i;
+            }
+            
+            sb = sb.Replace("§§", "§");
+
+            return string.Format(sb.ToString(), dic.OrderBy(x => kti[x.Key]).Select(x => x.Value).ToArray());
+        }
+
+        public static Assembly CompileInMemory(string code)
+        {
+            using (CSharpCodeProvider provider = new CSharpCodeProvider())
+            {
+                CompilerResults compiled = provider.CompileAssemblyFromSource(new CompilerParameters
+                {
+                    ReferencedAssemblies = {
+                        typeof(Uri).Assembly.Location, // System.dll
+                        typeof(HashSet<>).Assembly.Location, // System.Core.dll
+                        typeof(DependencyProperty).Assembly.Location, // WindowsBase.dll
+                        typeof(Application).Assembly.Location, // PresentationFramework.dll
+                        typeof(PixelShader).Assembly.Location, // PresentationCore.dll
+                    },
+                    IncludeDebugInformation = false,
+                    GenerateExecutable = false,
+                    GenerateInMemory = true
+                }, code);
+
+                if (compiled.Errors.Count == 0)
+                    return compiled.CompiledAssembly;
+                else
+                    throw new InvalidOperationException(string.Join(Environment.NewLine, compiled.Errors.OfType<CompilerError>().Select(e => e.ErrorText)));
+            }
+        }
+    }
+
+    [Obsolete("Use '" + nameof(ShaderClass) + "' instead.")]
+    internal static class ___old__ShaderClass
     {
         public static string GetSourceText(CodeDomProvider currentProvider, ShaderModel shaderModel, bool includePixelShaderConstructor)
         {
@@ -26,7 +193,7 @@
 
         public static Assembly CompileInMemory(string code)
         {
-            using (var provider = new CSharpCodeProvider(new Dictionary<string, string> { { "CompilerVersion", "v3.5" } }))
+            using (var provider = new Microsoft.CSharp.CSharpCodeProvider(new Dictionary<string, string> { { "CompilerVersion", "v3.5" } }))
             {
                 var options = new CompilerParameters
                 {

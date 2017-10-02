@@ -4,6 +4,7 @@
     using System.CodeDom.Compiler;
     using System.IO;
     using System.Reflection;
+    using System.Text;
     using System.Text.RegularExpressions;
     using System.Windows;
     using System.Windows.Controls;
@@ -16,7 +17,7 @@
     using System.Windows.Media.Media3D;
     using System.Xml;
     using ICSharpCode.TextEditor.Document;
-    using Microsoft.CSharp;
+    using Microsoft.CodeDom.Providers.DotNetCompilerPlatform;
     using Shazzam.CodeGen;
     using Shazzam.Controls;
     using Shazzam.Converters;
@@ -220,9 +221,18 @@
                 this.CurrentShaderEffect = (ShaderEffect)Activator.CreateInstance(t, ps);
                 this.InputControlsTab.SetCurrentValue(IsEnabledProperty, true);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                MessageBox.Show(ShazzamSwitchboard.MainWindow, "Cannot create a WPF shader from the code snippet.", "Compile error", MessageBoxButton.OK, MessageBoxImage.Error);
+                StringBuilder sb = new StringBuilder();
+
+                while (ex != null)
+                {
+                    sb.Insert(0, $"{ex.Message}\n{ex.StackTrace}");
+
+                    ex = ex.InnerException;
+                }
+
+                MessageBox.Show(ShazzamSwitchboard.MainWindow, $"Cannot create a WPF shader from the code snippet due to the following reason:\n\n{sb}", "Compile error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -542,7 +552,7 @@
             }
 
             this.shaderModel.Registers.ForEach(this.GenerateShaderInputControl);
-            this.csTextEditor.Text = ShaderClass.GetSourceText(CodeDomProvider.CreateProvider("CSharp"), this.shaderModel, includePixelShaderConstructor: false);
+            this.csTextEditor.Text = ShaderClass.GetSourceText(new CSharpCodeProvider(), this.shaderModel, includePixelShaderConstructor: false);
             this.csTextEditor.Document.HighlightingStrategy = HighlightingManager.Manager.FindHighlighterForFile(".cs");
         }
     }
